@@ -1,26 +1,21 @@
 import enum
+import os
 import pandas as pd
 from datetime import datetime, time
-from sqlalchemy import create_engine, Column, Integer, String, Float, Enum, DateTime, Time, ForeignKey
-from sqlalchemy.orm import declarative_base, relationship
+from sqlalchemy import create_engine, Column, Integer, String, Float, Enum, DateTime, Time, ForeignKey, Boolean
+from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
-df = pd.read_csv('C:/Users/ediks/OneDrive/Документы/GitHub/BDlab3/GlobalWeatherRepository.csv')
-
-selected_columns = [
-    'country',          
-    'last_updated',     
-    'sunrise',          
-    'wind_mph',         
-    'wind_kph',        
-    'wind_degree',      
-    'wind_direction',   
-    'gust_mph',         
-    'gust_kph'          
-]
-
-filtered_df = df[selected_columns]
-filtered_df.to_csv('filtered_weather_orm.csv', index=False)
-print(f"Розмірність: {filtered_df.shape}")
+csv_path = 'C:/Users/ediks/OneDrive/Документы/GitHub/BDlab3/GlobalWeatherRepository.csv'
+cols = ['country', 
+        'last_updated', 
+        'sunrise', 
+        'wind_mph', 
+        'wind_kph', 
+        'wind_degree', 
+        'wind_direction', 
+        'gust_mph', 
+        'gust_kph']
+df = pd.read_csv(csv_path)[cols]
 Base = declarative_base()
 
 class WindDirectionEnum(enum.Enum):
@@ -59,13 +54,47 @@ class WindData(Base):
     wind_direction = Column(Enum(WindDirectionEnum), nullable=True) 
     gust_mph = Column(Float, nullable=True)
     gust_kph = Column(Float, nullable=True)
+    should_go_outside = Column(Boolean, nullable=False)
     measurement = relationship("WeatherMeasurement", back_populates="wind")
 
+
 if __name__ == "__main__":
-    db_url = 'sqlite:///C:/Users/ediks/OneDrive/Документы/GitHub/BDlab3/weather.db'
+    db_url = 'sqlite:///C:/Users/ediks/OneDrive/Документы/GitHub/BDlab3/weather_v2.db'
     engine = create_engine(db_url)
     Base.metadata.create_all(engine)
-    for model in [WeatherMeasurement, WindData]:
-        print(f"\nТаблиця: '{model.__tablename__}'")
-        for column in model.__table__.columns:
-            print(f" - {column.name}: {column.type}")
+    
+    Session = sessionmaker(bind=engine)
+    with Session() as session:
+        if session.query(WeatherMeasurement).count() == 0:
+            print("Порожня база- заповнення")
+            
+            for _, row in df.iterrows():
+                date_obj = datetime.strptime(row['last_updated'], '%Y-%m-%d %H:%M')
+                time_obj = datetime.strptime(row['sunrise'], '%I:%M %p').time()
+                wind_speed_kph = row['wind_kph']
+                is_safe_weather = True
+                if pd.notna(wind_speed_kph) and wind_speed_kph > 36.0:
+                    is_safe_weather = False
+                
+                measurement = WeatherMeasurement(
+                    country=row['country'],
+                    last_updated=date_obj,
+                    sunrise=time_obj
+                )
+                
+                wind_info = WindData(
+                    wind_mph=row['wind_mph'],
+                    wind_kph=wind_speed_kph,
+                    wind_degree=int(row['wind_degree']) if pd.notna(row['wind_degree']) else None,
+                    wind_direction=WindDirectionEnum[row['wind_direction']] if pd.notna(row['wind_direction']) else None,
+                    gust_mph=row['gust_mph'],
+                    gust_kph=row['gust_kph'],
+                    should_go_outside=is_safe_weather
+                )
+                measurement.wind = wind_info
+                session.add(measurement)
+                
+            session.commit()
+            print("збережен weather_v2.db")
+        else:
+            print(f"база вже заповнена ({session.query(WeatherMeasurement).count()} записів).")
